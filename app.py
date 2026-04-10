@@ -226,7 +226,7 @@ def analyze():
         threading.Thread(target=wait_for_result, args=(req_id,)).start()
 
         # ⏳ wait small time only (UI ko chance mile)
-        for _ in range(5):   # 👈 sirf 5 sec wait
+        for _ in range(20):   # 👈 sirf 5 sec wait
             if data_store[req_id]["status"] == "done":
                 return jsonify({
                     "filename": filename,
