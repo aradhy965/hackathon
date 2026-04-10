@@ -182,8 +182,6 @@
 from flask import Flask, request, jsonify, send_from_directory
 import os
 import uuid
-import time
-import threading
 
 app = Flask(__name__)
 
@@ -192,16 +190,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 data_store = {}
 
-# 🔥 background timeout handler
-def wait_for_result(req_id):
-    for _ in range(25):
-        if data_store[req_id]["status"] == "done":
-            return
-        time.sleep(1)
-    data_store[req_id]["status"] = "timeout"
-
-
-# 🔥 MAIN API (single call feel)
+# 🔥 upload API
 @app.route('/analyze', methods=['POST'])
 def analyze():
     try:
@@ -225,23 +214,10 @@ def analyze():
             "result": None
         }
 
-        # 🔥 background thread → UI free rahegi
-        threading.Thread(target=wait_for_result, args=(req_id,)).start()
-
-        # 🔥 WAIT (max 20 sec → user ko single call feel)
-        start = time.time()
-        while time.time() - start < 20:
-            if data_store[req_id]["status"] == "done":
-                return jsonify({
-                    "filename": filename,
-                    "result": data_store[req_id]["result"]
-                })
-            time.sleep(1)
-
-        # 🔥 agar user late hai
+        # 🔥 instant return (NO WAIT)
         return jsonify({
-            "filename": filename,
-            "result": "not_reviewed_in_time"
+            "id": req_id,
+            "status": "uploaded"
         })
 
     except Exception as e:
@@ -249,7 +225,26 @@ def analyze():
         return jsonify({"error": str(e)}), 500
 
 
-# 📥 UI ke liye pending data
+# 🔥 same API for result check (GET)
+@app.route('/analyze', methods=['GET'])
+def get_result():
+    rid = request.args.get("id")
+
+    if not rid or rid not in data_store:
+        return jsonify({"error": "Invalid ID"}), 400
+
+    data = data_store[rid]
+
+    if data["status"] == "done":
+        return jsonify({
+            "filename": data["filename"],
+            "result": data["result"]
+        })
+
+    return jsonify({"status": "pending"})
+
+
+# 📥 pending for UI
 @app.route('/data')
 def get_data():
     return jsonify([
@@ -259,7 +254,7 @@ def get_data():
     ])
 
 
-# 📤 review API
+# 📤 review
 @app.route('/review')
 def review():
     rid = request.args.get("id")
@@ -273,7 +268,7 @@ def review():
     return "not found"
 
 
-# 🏠 UI (REAL-TIME AUTO UPDATE 🔥)
+# 🏠 UI
 @app.route('/')
 def home():
     return """
@@ -285,50 +280,43 @@ def home():
 
     <script>
     async function loadData() {
-        try {
-            let res = await fetch("/data");
-            let data = await res.json();
+        let res = await fetch("/data");
+        let data = await res.json();
 
-            let container = document.getElementById("container");
-            container.innerHTML = "";
+        let container = document.getElementById("container");
+        container.innerHTML = "";
 
-            if (data.length === 0) {
-                container.innerHTML = "<h3>No pending files</h3>";
-                return;
-            }
-
-            data.forEach(item => {
-                let div = document.createElement("div");
-
-                div.innerHTML = `
-                    <img src="/media/${item.filename}" width="300"><br>
-
-                    <button onclick="review('${item.id}', 'deepfake')">
-                        Deepfake
-                    </button>
-
-                    <button onclick="review('${item.id}', 'not_deepfake')">
-                        Not Deepfake
-                    </button>
-
-                    <hr>
-                `;
-
-                container.appendChild(div);
-            });
-
-        } catch (err) {
-            console.log("Error:", err);
+        if (data.length === 0) {
+            container.innerHTML = "<h3>No pending files</h3>";
+            return;
         }
+
+        data.forEach(item => {
+            let div = document.createElement("div");
+
+            div.innerHTML = `
+                <img src="/media/${item.filename}" width="300"><br>
+
+                <button onclick="review('${item.id}', 'deepfake')">
+                    Deepfake
+                </button>
+
+                <button onclick="review('${item.id}', 'not_deepfake')">
+                    Not Deepfake
+                </button>
+
+                <hr>
+            `;
+
+            container.appendChild(div);
+        });
     }
 
     async function review(id, label) {
         await fetch(`/review?id=${id}&label=${label}`);
     }
 
-    // 🔥 FAST AUTO REFRESH (1 sec)
     setInterval(loadData, 1000);
-
     loadData();
     </script>
 
@@ -337,12 +325,12 @@ def home():
     """
 
 
-# 📸 serve uploaded images
+# 📸 serve image
 @app.route('/media/<filename>')
 def media(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 
 
-# 🚀 run
 if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
     app.run(host="0.0.0.0", port=5000)
