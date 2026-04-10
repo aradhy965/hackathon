@@ -173,6 +173,11 @@
 #         return send_from_directory(UPLOAD_FOLDER, filename)
 #     except Exception as e:
 #         return jsonify({"error": str(e)}), 404
+# # 🚀 run
+# if __name__ == "__main__":
+#     app.run(host="0.0.0.0", port=5000)
+
+
 
 from flask import Flask, request, jsonify, send_from_directory
 import os
@@ -187,18 +192,16 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 data_store = {}
 
-# 🔥 background wait (NON-BLOCKING)
+# 🔥 background timeout handler
 def wait_for_result(req_id):
     for _ in range(25):
         if data_store[req_id]["status"] == "done":
             return
         time.sleep(1)
-    # timeout
-    if data_store[req_id]["status"] != "done":
-        data_store[req_id]["status"] = "timeout"
+    data_store[req_id]["status"] = "timeout"
 
 
-# 🔥 MAIN API (non-blocking feel but same)
+# 🔥 MAIN API (single call feel)
 @app.route('/analyze', methods=['POST'])
 def analyze():
     try:
@@ -222,11 +225,12 @@ def analyze():
             "result": None
         }
 
-        # 🔥 run background thread (IMPORTANT FIX)
+        # 🔥 background thread → UI free rahegi
         threading.Thread(target=wait_for_result, args=(req_id,)).start()
 
-        # ⏳ wait small time only (UI ko chance mile)
-        for _ in range(20):   # 👈 sirf 5 sec wait
+        # 🔥 WAIT (max 20 sec → user ko single call feel)
+        start = time.time()
+        while time.time() - start < 20:
             if data_store[req_id]["status"] == "done":
                 return jsonify({
                     "filename": filename,
@@ -234,9 +238,10 @@ def analyze():
                 })
             time.sleep(1)
 
+        # 🔥 agar user late hai
         return jsonify({
             "filename": filename,
-            "status": "pending"
+            "result": "not_reviewed_in_time"
         })
 
     except Exception as e:
@@ -244,7 +249,7 @@ def analyze():
         return jsonify({"error": str(e)}), 500
 
 
-# 📥 pending data
+# 📥 UI ke liye pending data
 @app.route('/data')
 def get_data():
     return jsonify([
@@ -254,7 +259,7 @@ def get_data():
     ])
 
 
-# 📤 review
+# 📤 review API
 @app.route('/review')
 def review():
     rid = request.args.get("id")
@@ -268,7 +273,7 @@ def review():
     return "not found"
 
 
-# 🏠 UI (AUTO LIVE UPDATE 🔥)
+# 🏠 UI (REAL-TIME AUTO UPDATE 🔥)
 @app.route('/')
 def home():
     return """
@@ -319,11 +324,10 @@ def home():
 
     async function review(id, label) {
         await fetch(`/review?id=${id}&label=${label}`);
-        loadData();
     }
 
-    // 🔥 AUTO REFRESH (IMPORTANT FIX)
-    setInterval(loadData, 2000);
+    // 🔥 FAST AUTO REFRESH (1 sec)
+    setInterval(loadData, 1000);
 
     loadData();
     </script>
@@ -333,15 +337,12 @@ def home():
     """
 
 
-# 📸 serve image
+# 📸 serve uploaded images
 @app.route('/media/<filename>')
 def media(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 
 
+# 🚀 run
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
-
-# # 🚀 run
-# if __name__ == "__main__":
-#     app.run(host="0.0.0.0", port=5000)
