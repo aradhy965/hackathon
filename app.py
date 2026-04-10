@@ -10,61 +10,96 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 data_store = {}
 
-# 🔥 MAIN API (single call)
 @app.route('/analyze', methods=['POST'])
 def analyze():
-    file = request.files.get('file')
-    if not file:
-        return jsonify({"error": "No file"}), 400
+    try:
+        # ✅ get file
+        file = request.files.get('file')
 
-    req_id = str(uuid.uuid4())
-    filename = req_id + "_" + file.filename
+        if not file:
+            return jsonify({"error": "No file provided"}), 400
 
-    file.save(os.path.join(UPLOAD_FOLDER, filename))
+        if file.filename.strip() == "":
+            return jsonify({"error": "Empty filename"}), 400
 
-    data_store[req_id] = {
-        "filename": filename,
-        "status": "pending",
-        "result": None
-    }
+        # ✅ create unique file
+        req_id = str(uuid.uuid4())
+        filename = req_id + "_" + file.filename
 
-    # ⏳ wait max 3 min
-    for _ in range(180):
-        if data_store[req_id]["status"] == "done":
-            return jsonify({
-                "filename": filename,
-                "result": data_store[req_id]["result"]
-            })
-        time.sleep(1)
+        filepath = os.path.join(os.getcwd(), UPLOAD_FOLDER, filename)
 
-    return jsonify({"error": "timeout"}), 408
+        # ✅ save file safely
+        try:
+            file.save(filepath)
+        except Exception as e:
+            return jsonify({"error": "File save failed", "details": str(e)}), 500
+
+        # ✅ store data
+        data_store[req_id] = {
+            "filename": filename,
+            "status": "pending",
+            "result": None
+        }
+
+        # ⏳ wait max 25 sec (Render safe)
+        for _ in range(25):
+            if data_store[req_id]["status"] == "done":
+                return jsonify({
+                    "filename": filename,
+                    "result": data_store[req_id]["result"]
+                })
+            time.sleep(1)
+
+        # ⏱️ not completed
+        return jsonify({
+            "filename": filename,
+            "status": "pending",
+            "message": "User did not respond in time"
+        })
+
+    except Exception as e:
+        print("🔥 SERVER ERROR:", str(e))
+        return jsonify({
+            "error": "Internal Server Error",
+            "details": str(e)
+        }), 500
 
 
-# 📥 API for frontend
+# 📥 pending items for UI
 @app.route('/data')
 def get_data():
-    return jsonify([
-        {"id": rid, "filename": item["filename"]}
-        for rid, item in data_store.items()
-        if item["status"] == "pending"
-    ])
+    try:
+        return jsonify([
+            {"id": rid, "filename": item["filename"]}
+            for rid, item in data_store.items()
+            if item["status"] == "pending"
+        ])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
-# 📤 review (no redirect used by JS)
+# 📤 review API
 @app.route('/review')
 def review():
-    rid = request.args.get("id")
-    label = request.args.get("label")
+    try:
+        rid = request.args.get("id")
+        label = request.args.get("label")
 
-    if rid in data_store:
-        data_store[rid]["status"] = "done"
-        data_store[rid]["result"] = label
-        return "ok"
+        if not rid or not label:
+            return "missing params"
 
-    return "not found"
+        if rid in data_store:
+            data_store[rid]["status"] = "done"
+            data_store[rid]["result"] = label
+            return "ok"
+
+        return "not found"
+
+    except Exception as e:
+        return f"error: {str(e)}"
 
 
-# 🏠 UI (NO redirect system)
+# 🏠 simple UI
 @app.route('/')
 def home():
     return """
@@ -76,45 +111,53 @@ def home():
 
     <script>
     async function loadData() {
-        let res = await fetch("/data");
-        let data = await res.json();
+        try {
+            let res = await fetch("/data");
+            let data = await res.json();
 
-        let container = document.getElementById("container");
-        container.innerHTML = "";
+            let container = document.getElementById("container");
+            container.innerHTML = "";
 
-        if (data.length === 0) {
-            container.innerHTML = "No pending files";
-            return;
+            if (data.length === 0) {
+                container.innerHTML = "No pending files";
+                return;
+            }
+
+            data.forEach(item => {
+                let div = document.createElement("div");
+
+                div.innerHTML = `
+                    <img src="/media/${item.filename}" width="300"><br>
+
+                    <button onclick="review('${item.id}', 'deepfake')">
+                        Deepfake
+                    </button>
+
+                    <button onclick="review('${item.id}', 'not_deepfake')">
+                        Not Deepfake
+                    </button>
+
+                    <hr>
+                `;
+
+                container.appendChild(div);
+            });
+
+        } catch (err) {
+            console.log("Error loading data", err);
         }
-
-        data.forEach(item => {
-            let div = document.createElement("div");
-            div.style.marginBottom = "20px";
-
-            div.innerHTML = `
-                <img src="/media/${item.filename}" width="300"><br>
-
-                <button onclick="review('${item.id}', 'deepfake')">
-                    Deepfake
-                </button>
-
-                <button onclick="review('${item.id}', 'not_deepfake')">
-                    Not Deepfake
-                </button>
-
-                <hr>
-            `;
-
-            container.appendChild(div);
-        });
     }
 
     async function review(id, label) {
-        await fetch(`/review?id=${id}&label=${label}`);
-        loadData();
+        try {
+            await fetch(`/review?id=${id}&label=${label}`);
+            loadData();
+        } catch (err) {
+            console.log("Review error", err);
+        }
     }
 
-    setInterval(loadData, 2000); // auto refresh
+    setInterval(loadData, 2000);
     loadData();
     </script>
 
@@ -123,11 +166,15 @@ def home():
     """
 
 
-# 📸 serve image
+# 📸 serve uploaded images
 @app.route('/media/<filename>')
 def media(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename)
+    try:
+        return send_from_directory(UPLOAD_FOLDER, filename)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 404
 
 
+# 🚀 run
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
